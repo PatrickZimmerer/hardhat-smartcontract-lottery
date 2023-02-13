@@ -18,7 +18,6 @@ contract Raffle {
             revert Raffle__NotEnoughETHEntered();
         }
         s_players.push(payable(msg.sender));
-        s_players = [];
     }
 
     function getEntranceFee() public view returns (uint256) {
