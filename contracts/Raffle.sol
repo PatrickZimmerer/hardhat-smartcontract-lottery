@@ -9,8 +9,13 @@ import "@chainlink/contracts/src/v0.8/interfaces/KeeperCompatibleInterface.sol";
 error Raffle__NotEnoughETHEntered();
 error Raffle__TransferFailed();
 error Raffle__NotOpen();
+error Raffle__UpkeepNotNeeded(
+    uint256 currentBalance,
+    uint256 numPLayers,
+    uint256 raffleState
+);
 
-contract Raffle is VRFConsumerBaseV2 {
+contract Raffle is VRFConsumerBaseV2, KeeperCompatibleInterface {
     /* Type declarations*/
     enum RaffleState {
         OPEN,
@@ -31,6 +36,7 @@ contract Raffle is VRFConsumerBaseV2 {
     // Lottery Variables
     address private s_recentWinner;
     RaffleState private s_raffleState;
+    uint256 private immutable i_interval;
 
     /* Eventys */
     event RaffleEnter(address indexed player);
@@ -42,7 +48,8 @@ contract Raffle is VRFConsumerBaseV2 {
         address vrfCoordinatorV2,
         bytes32 gasLane,
         uint64 subscriptionId,
-        uint32 callbackGasLimit
+        uint32 callbackGasLimit,
+        uint256 interval
     ) VRFConsumerBaseV2(vrfCoordinatorV2) {
         i_entranceFee = entranceFee;
         i_vrfCoordinator = VRFCoordinatorV2Interface(vrfCoordinatorV2);
@@ -51,6 +58,7 @@ contract Raffle is VRFConsumerBaseV2 {
         i_callbackGasLimit = callbackGasLimit;
         s_raffleState = RaffleState.OPEN;
         s_lastTimeStamp = block.timestamp;
+        i_interval = interval;
     }
 
     function enterRaffle() public payable {
@@ -69,14 +77,35 @@ contract Raffle is VRFConsumerBaseV2 {
      * they look for the 'upkeedNeeded' to return true.
      * The following should be true in order to return true:
      * 1. Our time interval should have passed
-     * 2. The lottery should
+     * 2. The lottery is open.
+     * 3. The contract has ETH.
+     * 4. Implicity, your subscription is funded with LINK.
      */
-    function checkUpKeep(bytes calldata /* checkData */) external override {
+    function checkUpkeep(
+        bytes memory /* checkData */
+    )
+        public
+        view
+        override
+        returns (bool upkeepNeeded, bytes memory /* performData */)
+    {
         bool isOpen = RaffleState.OPEN == s_raffleState;
-
+        bool timePassed = ((block.timestamp - s_lastTimeStamp) > i_interval);
+        bool hasPlayers = s_players.length > 0;
+        bool hasBalance = address(this).balance > 0;
+        upkeepNeeded = (timePassed && isOpen && hasBalance && hasPlayers);
+        return (upkeepNeeded, "0x0"); // can we comment this out?
     }
 
-    function requestRandomWinner() external {
+    function performUpkeep(bytes calldata /* performData */) external override {
+        (bool upkeepNeeded, ) = checkUpkeep("");
+        if (!upkeepNeeded) {
+            revert Raffle__UpkeepNotNeeded(
+                address(this).balance,
+                s_players.length,
+                uint256(s_raffleState)
+            );
+        }
         s_raffleState = RaffleState.CALCULATING;
         uint256 requestId = i_vrfCoordinator.requestRandomWords(
             i_gasLane,
@@ -96,7 +125,8 @@ contract Raffle is VRFConsumerBaseV2 {
         address payable recentWinner = s_players[indexOfWinner];
         s_recentWinner = recentWinner;
         s_raffleState = RaffleState.OPEN;
-        s_player = new address payable[](0);
+        s_players = new address payable[](0);
+        s_lastTimeStamp = block.timestamp;
         (bool success, ) = recentWinner.call{value: address(this).balance}("");
         if (!success) {
             revert Raffle__TransferFailed();
