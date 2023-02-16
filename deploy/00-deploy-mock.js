@@ -27,3 +27,4 @@ module.exports = async function ({ getNamedAccounts, deployments }) {
         log("-----------------------------------------------");
     }
 };
+module.exports.tags = ["all", "mocks"];
